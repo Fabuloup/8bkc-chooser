@@ -107,21 +107,66 @@ void handleCharging() {
 	guiInit();
 	guiCharging();
 
+	uint8_t timeout=false;
+	time_t now;
+	const time_t timeoutDuration=5;
+	time_t maxTimeout=0;
+	nvs_handle nvsHandle=NULL;
+	if (nvs_open("8bkc", NVS_READWRITE, &nvsHandle)==ESP_OK) {
+		nvs_get_u8(nvsHandle, "timeout", &timeout);
+	}
+
+	if(timeout) {
+		time(&now);
+		maxTimeout=now+timeoutDuration;
+	}
+
 	//Disable app cpu
 	DPORT_SET_PERI_REG_MASK(DPORT_APPCPU_CTRL_B_REG, DPORT_APPCPU_CLKGATE_EN);
 	//Speed down
 	rtc_clk_cpu_freq_set(RTC_CPU_FREQ_2M);
 
+	bool isScreenSavingActive=false;
+
 	do {
 		r=kchal_get_chg_status();
-		if (r==KC_CHG_FULL || fixFull) {
-			guiFull();
-			printf("Full!\n");
-			fullCtr++;
-		} else if (r==KC_CHG_CHARGING) {
-			guiCharging(kchal_get_bat_mv()>4100);
-			printf("Charging...\n");
-			fullCtr=0;
+		if(timeout) {
+			time(&now);
+
+			if(now > maxTimeout) {
+				isScreenSavingActive = true;
+				kcugui_cls();
+				kcugui_flush();
+			}
+		}
+
+		if(!isScreenSavingActive) {
+			if (r==KC_CHG_FULL || fixFull) {
+				guiFull();
+				printf("Full!\n");
+				fullCtr++;
+			}
+			else if (r==KC_CHG_CHARGING) {
+				guiCharging(kchal_get_bat_mv() > 4100);
+				printf("Charging...\n");
+				fullCtr = 0;
+			}
+		}
+
+		if (kchal_get_keys() & KC_BTN_POWER) {
+			rtc_clk_cpu_freq_set(RTC_CPU_FREQ_80M);
+			printf("Power btn pressed; restarting with override bit set\n");
+			uint32_t r=REG_READ(RTC_CNTL_STORE0_REG);
+			r|=0x100;
+			REG_WRITE(RTC_CNTL_STORE0_REG, r);
+			kchal_boot_into_new_app();
+		}
+
+		int btn=kchal_get_keys();
+		if (btn&KC_BTN_A || btn&KC_BTN_B || btn&KC_BTN_START || btn&KC_BTN_SELECT) {
+			time(&now);
+			isScreenSavingActive = false;
+			maxTimeout=now+timeoutDuration;
 		}
 
 		if (kchal_get_keys() & KC_BTN_POWER) {
